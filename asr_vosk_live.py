@@ -6,20 +6,20 @@ from voice_router import on_asr_final
 
 MODEL_PATH = "models/vosk-model-en-us-0.22-lgraph"
 SAMPLE_RATE = 16000
-BLOCKSIZE = 4096  # ↓ 0.5s → ~0.26s (체감 반응속도 개선)
+BLOCKSIZE = 4096  # ↓ Reduced from 0.5s to ~0.26s (improves perceived response time)
 PHRASES = [
-  # 문장 패턴(질문)
-  "what is the weather in", "what's the weather in", "how is the weather in",
+    # Sentence patterns (questions)
+    "what is the weather in", "what's the weather in", "what's the weather like in" "how is the weather in",
 
-  # 날짜 토큰 (질의 보조)
-  "what is the temperature in", "temperature in", "weather in",
-  "weather now in", "temperature now in", "now in", "right now in",
-  "now", "today", "tomorrow", "day after tomorrow",
+    # Date tokens (query helpers)
+    "what is the temperature in", "temperature in", "weather in",
+    "weather now in", "temperature now in", "now in", "right now in",
+    "now", "today", "tomorrow", "day after tomorrow",
 
-  # 도시명(정식 + 흔한 오타/변형)
-  "monday","tuesday","wednesday","thursday","friday","saturday","sunday",
-  "miyazaki","miyasaki","miya zaki",
-  "toronto","tokyo","busan","pusan","seoul","seol","soul","new york"
+    # City names (formal + common typos/variants)
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "miyazaki", "miyasaki", "miya zaki",
+    "toronto", "tokyo", "busan", "pusan", "seoul", "seol", "soul", "new york"
 ]
 
 
@@ -28,7 +28,7 @@ def main():
     rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(PHRASES))
     rec.SetWords(True)
 
-    # 너무 많은 오디오가 한꺼번에 밀려들어오는 걸 방지
+    # Limit the number of audio chunks queued to prevent overflow
     q = queue.Queue(maxsize=8)
 
     def audio_cb(indata, frames, time_info, status):
@@ -37,7 +37,7 @@ def main():
         try:
             q.put_nowait(bytes(indata))
         except queue.Full:
-            # 가끔 밀리면 가장 오래된 버퍼를 버림
+            # If the queue is full, discard the oldest chunk to avoid delay
             _ = q.get_nowait()
             q.put_nowait(bytes(indata))
 
@@ -55,14 +55,14 @@ def main():
                     result = json.loads(rec.Result())
                     text = result.get("text", "").strip()
                     if text:
-                        # 1) 너무 짧은/무의미 결과 필터
+                        # 1) Filter out too short or meaningless results
                         if len(text) < 3 or len(text.split()) < 2:
-                            # 리셋하고 다음 입력 대기
+                            # Reset and wait for the next input
                             rec.Reset()
                             partial_last = ""
                             continue
 
-                        # 2) 직전 결과와 동일하면(1.0초 내) 무시
+                        # 2) If the same result is detected within 1.0s, ignore it
                         now = time.time()
                         if text == last_final_text and (now - last_final_ts) < 1.0:
                             rec.Reset()
@@ -72,7 +72,7 @@ def main():
                         print(">>", text)
                         on_asr_final(text, confidence=None)
 
-                        # 상태 갱신 + 리셋(중요!)
+                        # Update state and reset (important!)
                         last_final_text = text
                         last_final_ts = now
                         rec.Reset()
@@ -84,6 +84,7 @@ def main():
 
         except KeyboardInterrupt:
             print("\n[Vosk] Stopped.")
+
 
 if __name__ == "__main__":
     main()
