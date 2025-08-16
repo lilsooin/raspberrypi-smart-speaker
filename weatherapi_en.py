@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from gtts import gTTS
 
 # === Settings ===
-WEATHERAPI_KEY = "ba448c045b304d0a8bc00820251008"   # <-- Put your API key here
+WEATHERAPI_KEY = os.environ.get("WEATHERAPI_KEY")   # API key
 DEFAULT_CITY = "Toronto"
 UNITS = "metric"   # metric = Celsius, imperial = Fahrenheit
 LANG_TTS = "en"

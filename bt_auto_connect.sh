@@ -3,7 +3,6 @@
 # ===== 사용자 설정 =====
 BT_DEVICE_MAC="00:02:3C:C7:05:7A"       # Pebble V3 MAC 주소
 VENV_PATH="$HOME/venv"                 # 가상환경 경로
-PY_SCRIPT="$HOME/work/test.py"         # 실행할 Python 파일 경로
 TMP_VOICE="$HOME/work/bt_status.mp3"   # 음성 안내 mp3 저장 경로
 
 # ===== TTS 함수 (텍스트 → 음성) =====
@@ -74,7 +73,6 @@ echo "🐍 Activating Python virtual environment..."
 source "$VENV_PATH/bin/activate"
 
 echo "🚀 Running Python script..."
-python3 "$PY_SCRIPT"
 
 # ===== 종료 =====
 echo "✅ Finished."

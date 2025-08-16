@@ -1,7 +1,8 @@
 # voice_router.py
 import re
 import time
-from weatherapi_en import handle_weather_query
+# 기존: weather 처리 핸들러
+from weatherapi_en import handle_weather_query, speak_en  # ← TTS 사용 위해 speak_en 추가 임포트
 
 WAKE_WORDS = ["computer", "hey assistant", "hey buddy"]
 
