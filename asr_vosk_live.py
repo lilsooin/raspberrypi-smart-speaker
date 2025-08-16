@@ -8,6 +8,9 @@ MODEL_PATH = "models/vosk-model-en-us-0.22-lgraph"
 SAMPLE_RATE = 16000
 BLOCKSIZE = 4096  # ↓ Reduced from 0.5s to ~0.26s (improves perceived response time)
 PHRASES = [
+    # Wake words (boost)
+    "hey there", "hello there", "the hey there", "the hello there",
+
     # Sentence patterns (questions)
     "what is the weather in", "what's the weather in", "what's the weather like in" "how is the weather in",
 
@@ -22,6 +25,9 @@ PHRASES = [
     "toronto", "tokyo", "busan", "pusan", "seoul", "seol", "soul", "new york"
 ]
 
+def _is_wake_like(text: str) -> bool:
+    t = text.strip().lower()
+    return t in ("hey there", "hello there")
 
 def main():
     model = Model(MODEL_PATH)
@@ -56,13 +62,15 @@ def main():
                     text = result.get("text", "").strip()
                     if text:
                         # 1) Filter out too short or meaningless results
-                        if len(text) < 3 or len(text.split()) < 2:
-                            # Reset and wait for the next input
+                        tokens = text.split()
+
+                        # 짧은 결과 필터 — 단, 웨이크워드는 통과
+                        if (len(text) < 3 or len(tokens) < 2) and not _is_wake_like(text):
                             rec.Reset()
                             partial_last = ""
                             continue
 
-                        # 2) If the same result is detected within 1.0s, ignore it
+                        # 같은 결과 빠르게 반복될 때 억제
                         now = time.time()
                         if text == last_final_text and (now - last_final_ts) < 1.0:
                             rec.Reset()
@@ -70,7 +78,7 @@ def main():
                             continue
 
                         print(">>", text)
-                        on_asr_final(text, confidence=None)
+                        on_asr_final(text, confidence=None)                            
 
                         # Update state and reset (important!)
                         last_final_text = text
@@ -84,7 +92,6 @@ def main():
 
         except KeyboardInterrupt:
             print("\n[Vosk] Stopped.")
-
 
 if __name__ == "__main__":
     main()
