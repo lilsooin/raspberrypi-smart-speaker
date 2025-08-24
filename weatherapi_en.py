@@ -101,6 +101,8 @@ def handle_weather_query(utterance: str):
     target_date, date_label = parse_when(utterance)
     city = parse_city(utterance)
 
+    print("city: " + city)
+
     try:
         if intent == "forecast" or target_date != datetime.now().date():
             data = fetch_forecast(city, days=5)

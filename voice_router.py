@@ -14,6 +14,9 @@ SLEEP_WORDS = ["shut up", "good bye", "never mind", "cancel"]
 _LEADING_SEP_RE = re.compile(r'^[\s\W_]+', flags=re.UNICODE)
 _WAKE_WINDOW_SEC = 30  # 깨어있는 유지 시간
 _awake_until = 0.0     # 타임스탬프
+KEEP_AWAKE_ON_ACTIVITY_SEC = 15
+POST_TTS_GRACE_SEC = 6
+
 
 # 디바운스(중복 억제)용 캐시
 _last_text = ""
@@ -26,12 +29,13 @@ WEATHER_KEY = re.compile(r"\b(?:the\s+)?(weather|temperature|temp|forecast|rain|
 
 # 도시 패턴 보강:
 # - in/for/at <city>
-# - <city> weather/forecast
+# "<city> weather/forecast" 는 문장 맨 앞에서만 허용( ^ ),
+# preposition(in/for/at) 뒤 <city> 는 어디서든 허용
 CITY_PAT = re.compile(
     r"""
-    (?:\b(?:in|for|at)\s+([a-zA-Z][a-zA-Z\s\-']+)\b)         # in/for/at CITY
+    (?:^([A-Za-z][A-Za-z\s\-']+?)\s+(?:weather|forecast)\b)  # CASE A: ^CITY weather
     |
-    (?:\b([a-zA-Z][a-zA-Z\s\-']+)\s+(?:weather|forecast)\b)  # CITY weather/forecast
+    (?:\b(?:in|for|at)\s+([A-Za-z][A-Za-z\s\-']+)\b)         # CASE B: in/for/at CITY
     """,
     re.I | re.X
 )
@@ -40,6 +44,11 @@ WHEN_PAT = re.compile(
     r"\b(now|today|tomorrow|day after tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     re.I
 )
+
+STOPWORDS_START = {
+    "what", "what's", "whats", "how", "is", "the", "please", "tell", "tell me", "can", "could"
+}
+
 
 # -----------------------------
 # 유틸 함수
@@ -53,8 +62,10 @@ def _is_awake() -> bool:
 def _wake():
     global _awake_until
     _awake_until = _now() + _WAKE_WINDOW_SEC
-    # 필요 시 짧은 피드백
-    # speak_en("Yes?")
+
+def keep_awake(sec):
+    global _awake_until
+    _awake_until = max(_awake_until, _now() + sec)
 
 def _sleep():
     """수면 상태로 전환."""
@@ -117,9 +128,14 @@ def extract_city(q: str) -> str | None:
     m = CITY_PAT.search(q)
     if not m:
         return None
-    # 두 캡쳐 그룹 중 하나만 매칭될 수 있으므로 둘 중 있는 쪽 사용
-    city = (m.group(1) or m.group(2)) if (m.group(1) or m.group(2)) else None
-    return city.strip() if city else None
+    city = (m.group(1) or m.group(2) or "").strip()
+    if not city:
+        return None
+    # 질문사/불용어로 시작하면 무효 (예: "what miya zaki" → drop)
+    first_token = city.lower().split()[0]
+    if first_token in STOPWORDS_START:
+        return None
+    return city
 
 # -----------------------------
 # 콜백: ASR 최종 결과 수신
@@ -157,15 +173,15 @@ def on_asr_final(recognized_text: str, confidence: float | None = None):
         return
 
     # 5) 웨이크워드 처리
-    if is_wake_like:
+    if _is_awake() or is_wake_like or WEATHER_KEY.search(q):
         _wake()
+        
         # 웨이크워드 제거 후 남은 질의가 있으면 즉시 처리
         rest = _strip_leading_wake(q)
         if rest:
             q = rest  # 같은 호출에서 계속 진행
         else:
             print("[Router] Wake!")
-            # speak_en("Yes?")
             return
 
     # 6) 깨어있지 않으면 무시 (단, 5)에서 바로 깬 경우는 통과됨)
@@ -186,9 +202,21 @@ def on_asr_final(recognized_text: str, confidence: float | None = None):
     has_when = WHEN_PAT.search(q) is not None
 
     # 10) 핸들러 호출
-    # - 도시가 있거나, when 키워드가 있거나, 날씨 키워드가 있으면 바로 통과
-    if city or has_when or WEATHER_KEY.search(q):
-        handle_weather_query(q)
+    domain = route_domain(q)
+
+    if domain == "weather":
+        keep_awake(KEEP_AWAKE_ON_ACTIVITY_SEC)  # 처리 시작 전: 최소 유지
+        try:
+            # 도메인만 확정되면 무조건 호출 → 핸들러가 자체적으로 부족한 슬롯(도시/날짜 등)을 보완/질문
+            handle_weather_query(q)
+        finally:
+            keep_awake(POST_TTS_GRACE_SEC)  # TTS 직후 여유
+    elif domain == "fx":  # 예: 환율
+        keep_awake(KEEP_AWAKE_ON_ACTIVITY_SEC)
+        try:
+            handle_fx_query(q)
+        finally:
+            keep_awake(POST_TTS_GRACE_SEC)
     else:
-        # 안전망: 키워드가 모호해도 핸들러에서 퍼지 보정 가능
-        handle_weather_query(q)
+        # unknown: 필요하면 간단 피드백/무시
+        pass
