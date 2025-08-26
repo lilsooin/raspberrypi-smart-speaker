@@ -67,12 +67,13 @@ FX_ALIASES_MINI = {
     # USD
     "usd":"USD","dollar":"USD","us":"USD","usa":"USD","america":"USD","american":"USD",
     # CAD
-    "cad":"CAD","canadian":"CAD","canada":"CAD","toronto":"CAD","vancouver":"CAD","montreal":"CAD",
+    "cad":"CAD","canadian":"CAD","canada":"CAD"
 }
 
 # ASR 흔한 오인식 교정
 FX_PREFIX_FIX = {
     "seol": "seoul",     # seol → seoul
+    "soul": "seoul",
     "miya": "miyazaki",  # miya → miyazaki
     "pusan": "busan",
 }

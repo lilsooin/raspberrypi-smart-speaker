@@ -22,7 +22,18 @@ PHRASES = [
     # City names (formal + common typos/variants)
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     "miyazaki", "miyasaki", "miya zaki",
-    "toronto", "tokyo", "busan", "pusan", "seoul", "seol", "soul", "new york"
+    "toronto", "tokyo", "busan", "pusan", "seoul", "seol", "soul", "new york",
+
+    # currency words
+     # 한국 원
+    "currency", "exchange", "to", "from",
+    "KOR", "won", "korean", "korea",
+    # 일본 엔
+    "JP", "jpy", "yen", "japanese", "japan",
+    # 미국 달러
+    "USD", "dollar", "USD", "us", "america", "american",
+    # 캐나다 달러
+    "CAD", "canadian", "canada"
 ]
 
 def _is_wake_like(text: str) -> bool:

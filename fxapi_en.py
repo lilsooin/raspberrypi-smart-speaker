@@ -2,6 +2,9 @@
 import re
 import requests
 from weatherapi_en import speak_en  # 기존 TTS 재사용
+import time
+import json
+
 
 FRANKFURTER = "https://api.frankfurter.dev"
 
@@ -28,66 +31,198 @@ ALLOWED_PAIRS = {
     ("USD", "CAD"),
 }
 
-# 입력에서 금액/페어 파싱: "1000 kor to usd", "kor to usd", "jp to cad", "5000 won to cad"
-RE_AMOUNT_PAIR = re.compile(
+# 1) 금액 + from/to 패턴 (from 생략 허용)
+RE_AMOUNT_FROM_TO = re.compile(
     r"""
-    ^\s*
-    (?:(?P<amount>\d+(?:\.\d+)?)\s+)?           # 옵션: 금액
-    (?P<from>[A-Za-z]{2,8})\s*                  # from 통화 별칭
-    (?:to|in|->|→)\s*                           # to 키워드
-    (?P<to>[A-Za-z]{2,8})\s*$                   # to 통화 별칭
+    (?<![A-Za-z0-9])
+    (?:(?P<amount>\d+(?:\.\d+)?)\s+)?         # optional amount
+    (?:from\s+)?(?P<from>[A-Za-z]{2,12})\s*   # from token (with optional 'from')
+    (?:to|in|into|->|→)\s*                    # connector
+    (?P<to>[A-Za-z]{2,12})(?![A-Za-z])
     """,
-    re.I | re.X,
+    re.I | re.X
 )
 
-def _norm_ccy(token: str) -> str | None:
-    t = token.strip().lower()
+# 2) 연결어 없이 두 통화가 연속으로 나오는 패턴: "<from> <to>"
+RE_TWO_CURRENCIES = re.compile(
+    r"(?<![A-Za-z0-9])(?P<from>[A-Za-z]{2,12})\s+(?P<to>[A-Za-z]{2,12})(?![A-Za-z])",
+    re.I
+)
+
+FILLERS = {
+    "currency","exchange","rate","rates","hello","there","the"
+}
+
+CONNECTORS = {"to","in","into"}
+
+
+def _norm_ccy(tok: str) -> str | None:
+    t = tok.strip().lower()
     return ALIASES.get(t) or (t.upper() if t.upper() in {"KRW","JPY","USD","CAD"} else None)
 
-def _fetch_rate(base: str, target: str, amount: float | None):
-    params = []
-    if amount is not None:
-        params.append(f"amount={amount}")
-    params.append(f"from={base}")
-    params.append(f"to={target}")
-    url = f"{FRANKFURTER}/latest?" + "&".join(params)
-    r = requests.get(url, timeout=5)
-    r.raise_for_status()
-    data = r.json()
-    # Frankfurter: {"amount":..., "base":"USD","date":"YYYY-MM-DD","rates":{"CAD":1.37}}
-    rate = data["rates"][target]
-    # amount가 있으면 rate는 이미 변환된 금액, 없으면 1 base 대비 환율
-    return float(rate)
+def _tokenize(s: str):
+    # 영문/숫자 토큰만 추출 (대소문자 무시)
+    return re.findall(r"[A-Za-z]+|\d+(?:\.\d+)?", s.lower())
+
+def infer_pair_freeform(s: str):
+    """
+    'to'가 없거나 ASR이 누락해도 문장 내 통화 토큰만 모아
+    - 연결어가 있으면 직전/직후 통화를 (from→to)
+    - 없으면 문장 내 마지막 2개 통화를 (from→to)
+    를 반환. 없으면 (None, None)
+    """
+    tokens = _tokenize(s)
+
+    # 통화 후보 위치 수집
+    cur_idxs = []  # [(idx, code)]
+    for i, t in enumerate(tokens):
+        if t in FILLERS:
+            continue
+        code = _norm_ccy(t)
+        if code:
+            cur_idxs.append((i, code))
+
+    if not cur_idxs:
+        return (None, None)
+
+    # 1) 연결어 기준으로 from→to 추정
+    conn_idx = next((i for i, t in enumerate(tokens) if t in CONNECTORS), None)
+    if conn_idx is not None:
+        # conn 이전의 마지막 통화, conn 이후의 첫 통화
+        left = None
+        for i, code in reversed(cur_idxs):
+            if i < conn_idx:
+                left = code
+                break
+        right = None
+        for i, code in cur_idxs:
+            if i > conn_idx:
+                right = code
+                break
+        if left and right:
+            return (left, right)
+        # 연결어는 있는데 한쪽이 비면, 마지막 2개 추정으로 폴백
+
+    # 2) 마지막 2개 통화로 추정
+    if len(cur_idxs) >= 2:
+        _, a = cur_idxs[-2]
+        _, b = cur_idxs[-1]
+        return (a, b)
+
+    # 통화가 1개뿐이면 불충분
+    return (None, None)
+
+# 더 튼튼한 fetch
+def _fetch_rate(base: str, target: str, amount: float | None, timeout_sec=4.0, retries=1):
+    def fetch_frankfurter(domain):
+        params = []
+        if amount is not None:
+            params.append(f"amount={amount}")
+        params += [f"from={base}", f"to={target}"]
+        url = f"https://{domain}/latest?" + "&".join(params)
+        r = requests.get(url, timeout=timeout_sec)
+        status = r.status_code
+        try:
+            data = r.json()
+        except Exception:
+            data = {"_raw": r.text}
+        if status != 200:
+            raise RuntimeError(f"Frankfurter {domain} HTTP {status} data={data}")
+        if "rates" not in data or target not in data["rates"]:
+            raise RuntimeError(f"Frankfurter {domain} missing rate for {target}: {data}")
+        return float(data["rates"][target])
+
+    def fetch_exchangerate_host():
+        amt = amount if amount is not None else 1
+        url = f"https://api.exchangerate.host/convert?from={base}&to={target}&amount={amt}"
+        r = requests.get(url, timeout=timeout_sec)
+        status = r.status_code
+        try:
+            data = r.json()
+        except Exception:
+            data = {"_raw": r.text}
+        if status != 200 or data.get("success") is False:
+            raise RuntimeError(f"exchangerate.host HTTP {status} data={data}")
+        return float(data.get("result"))
+
+    last_exc = None
+    for _ in range(retries + 1):
+        try:
+            return fetch_frankfurter("api.frankfurter.dev")
+        except Exception as e1:
+            last_exc = e1
+            try:
+                return fetch_frankfurter("api.frankfurter.app")
+            except Exception as e2:
+                last_exc = e2
+                try:
+                    return fetch_exchangerate_host()
+                except Exception as e3:
+                    last_exc = e3
+        time.sleep(0.15)
+
+    print("[FX] fetch failed:", repr(last_exc))
+    raise last_exc
 
 def handle_fx_query(q: str):
-    m = RE_AMOUNT_PAIR.search(q)
-    if not m:
-        speak_en("Say like: kor to usd, or 1000 won to cad.")
+    s = q.strip()
+    print("s >> " + s)
+
+    # 1) 금액+from/to 패턴 먼저 시도
+    m = RE_AMOUNT_FROM_TO.search(s)
+    print(f"m >> {m}")
+    if m:
+        amount = float(m.group("amount")) if m.group("amount") else None
+        base = _norm_ccy(m.group("from"))
+        target = _norm_ccy(m.group("to"))
+        # if base in "JPY" and target in "KRW":
+        #    amount * 100
+        # elif base in "KRW" and target in "JPY":
+            
+       if not base or not target:
+            print("I couldn't recognize the currencies. Try saying from Korea to Japan.")
+            speak_en("I couldn't recognize the currencies. Try saying from Korea to Japan.")
+            return
+        if (base, target) not in ALLOWED_PAIRS:
+            print("That pair is not supported.")
+            speak_en("That pair is not supported.")
+            return
+        try:
+            val = _fetch_rate(base, target, amount)
+            if amount is None:
+                print(f"one {base} is {val:.4f} {target}.")
+                speak_en(f"One {base} is {val:.4f} {target}.")
+            else:
+                print(f"{amount:.2f} {base} is {val:.2f} {target}.")
+                speak_en(f"{amount:.2f} {base} is {val:.2f} {target}.")
+        except Exception:
+            print("I couldn't fetch the exchange rate right now.")
+            speak_en("I couldn't fetch the exchange rate right now.")
         return
 
-    amount_s = m.group("amount")
-    amount = float(amount_s) if amount_s else None
-    from_alias = m.group("from")
-    to_alias = m.group("to")
-
-    base = _norm_ccy(from_alias)
-    target = _norm_ccy(to_alias)
-    if not base or not target:
-        speak_en("I couldn't recognize the currencies. Try kor to usd or jp to cad.")
+    # 2) 자유형 파싱: 연결어 없어도 마지막 두 통화로 추정
+    base, target = infer_pair_freeform(s)
+    if base and target:
+        # 허용 페어 확인 + 역순 보정
+        try_pairs = []
+        if (base, target) in ALLOWED_PAIRS:
+            try_pairs.append((base, target))
+        if (target, base) in ALLOWED_PAIRS:
+            try_pairs.append((target, base))
+        if try_pairs:
+            for b, t in try_pairs:
+                try:
+                    val = _fetch_rate(b, t, None)
+                    print(f"One {b} is {val:.4f} {t}.")
+                    speak_en(f"One {b} is {val:.4f} {t}.")
+                    return
+                except Exception:
+                    pass
+        # 통화는 맞게 잡았는데 지원 페어가 아니면 안내
+        print("That pair is not supported.")
+        speak_en("That pair is not supported.")
         return
 
-    # 허용 페어만 처리
-    if (base, target) not in ALLOWED_PAIRS:
-        speak_en("That pair is not supported. Try kor to usd, kor to cad, kor to jp, jp to cad, jp to usd, jp to kor, or usd to cad.")
-        return
-
-    try:
-        rate_or_amount = _fetch_rate(base, target, amount)
-        if amount is None:
-            # 1 base → rate target
-            speak_en(f"One {base} is {rate_or_amount:.4f} {target}.")
-        else:
-            # amount base → converted target amount
-            speak_en(f"{amount:.2f} {base} is {rate_or_amount:.2f} {target}.")
-    except Exception:
-        speak_en("I couldn't fetch the exchange rate right now.")
+    # 3) 여전히 못 찾으면 간단 안내
+    print("Please say like: from Korea to Japan, or 1000 won to CAD.")
+    speak_en("Please say like: from Korea to Japan, or 1000 won to CAD.")
