@@ -164,21 +164,34 @@ def _format_response(base: str, target: str, amount: float | None, rate: float) 
     - 그 외는 1 단위
     """
     if amount is not None:
+        fx_debug("amount is not None >")
+        fx_debug(f"base: {base}")
+        fx_debug(f"target: {target}")
         converted = rate  # Frankfurter/exhost는 amount 포함 시 변환값을 반환 or 비율? → 여기선 rate를 'to 금액'으로 취급
         # 위 fetch 구현은 Frankfurter는 rates[target], amount None이면 1단위 비율,
         # exchangerate.host는 result가 amount 적용 값. 혼선을 피하려고 아래로 통일:
         # amount가 주어진 경우엔 다시 직접 계산:
-        unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
+        # unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
         converted = unit_rate * amount
         return f"{amount:.2f} {base} is {converted:.2f} {target}."
     else:
-        display_amt = 100.0 if {base, target} == {"KRW", "JPY"} else 1.0
-        unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
-        converted = unit_rate * display_amt
-        if display_amt == 100.0:
-            return f"{int(display_amt)} {base} is {converted:.2f} {target}."
+        fx_debug("amount is None >")
+        fx_debug(f"base: {base}")
+        fx_debug(f"target: {target}")
+        
+        if {base, target} == {"JPY", "KRW"}:
+            if base == "KRW":
+                temp = target
+                target = base
+                base = temp
+                print("temp >> " + temp)
+                print("target >> " + target)
+                print("base >> " + base)
+            unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
+            return f"One hundread {base} is {(unit_rate * 100):.2f} {target}."
         else:
-            return f"One {base} is {converted:.4f} {target}."
+            unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
+            return f"One {base} is {unit_rate:.2f} {target}."
 
 # ------------------- 엔트리 -------------------
 def handle_fx_query(q: str):
@@ -230,6 +243,7 @@ def handle_fx_query(q: str):
             speak_en("I couldn't fetch the exchange rate right now.")
             return
 
+    fx_debug("free parsing")
     # 2) 자유형 파싱: 연결어 없어도 마지막 두 통화로 추정
     base, target = infer_pair_freeform(s)
     fx_debug("freeform:", (base, target))
@@ -243,7 +257,9 @@ def handle_fx_query(q: str):
             for b, t in try_pairs:
                 try:
                     txt = _format_response(b, t, None, rate=None)
+                    print(">>>>> txt" + txt)
                     fx_debug("ok:", txt)
+
                     speak_en(txt)
                     return
                 except Exception as e:
