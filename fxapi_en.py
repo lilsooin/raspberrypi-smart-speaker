@@ -22,7 +22,7 @@ ALIASES = {
     # 일본 엔
     "jp": "JPY", "jpy": "JPY", "yen": "JPY", "japanese": "JPY", "japan": "JPY",
     # 미국 달러
-    "usd": "USD", "dollar": "USD", "us": "USD", "america": "USD", "american": "USD",
+    "usd": "USD", "U S": "USD", "dollar": "USD", "US": "USD", "america": "USD", "american": "USD",
     # 캐나다 달러
     "cad": "CAD", "canadian": "CAD", "canada": "CAD",
 }
@@ -36,7 +36,18 @@ ALLOWED_PAIRS = {
     ("JPY", "USD"),
     ("JPY", "KRW"),
     ("USD", "CAD"),
+    ("USD", "KRW"),
+    ("USD", "JPY"),
 }
+
+# === 추가/수정: 통화 이름(음성용)과 자리수 설정 ===
+TTS_CCY_NAME = {
+    "JPY": "yen",
+    "KRW": "won",
+    "USD": "USD",
+    "CAD": "CAD",
+}
+
 
 # 1) 금액 + from/to 패턴 (from 생략 허용)
 RE_AMOUNT_FROM_TO = re.compile(
@@ -188,15 +199,32 @@ def _format_response(base: str, target: str, amount: float | None, rate: float) 
                 print("target >> " + target)
                 print("base >> " + base)
             unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
-            return f"One hundread {base} is {(unit_rate * 100):.2f} {target}."
+            return f"One hundred yen is {(unit_rate * 100):.2f} won."
         else:
+            if target == "USD":
+                temp = target
+                target = base
+                base = temp
+            elif base!= "USD" and target == "CAD":
+                temp = target
+                target = base
+                base = temp
+
             unit_rate = _fetch_rate(base, target, None)  # 1단위 비율
-            return f"One {base} is {unit_rate:.2f} {target}."
+            return f"One {TTS_CCY_NAME.get(base, base)} is {unit_rate:.2f} {TTS_CCY_NAME.get(target, target)}."
 
 # ------------------- 엔트리 -------------------
 def handle_fx_query(q: str):
     s = q.strip()
     fx_debug("input:", s)
+
+    # 한 번만 말하기 가드
+    spoken = False
+    def say_once(msg: str):
+        nonlocal spoken
+        if not spoken:
+            speak_en(msg)
+            spoken = True
 
     # 1) 금액+from/to 우선
     m = RE_AMOUNT_FROM_TO.search(s)
@@ -209,21 +237,21 @@ def handle_fx_query(q: str):
 
         if not base or not target:
             fx_debug("parse fail: base/target missing")
-            speak_en("I couldn't recognize the currencies. Try saying from Korea to Japan.")
+            say_once("I couldn't recognize the currencies. Try saying from Korea to Japan.")
             return
         if (base, target) not in ALLOWED_PAIRS:
             fx_debug("pair not allowed:", (base, target))
-            speak_en("That pair is not supported.")
+            say_once("That pair is not supported.")
             return
         try:
-            # 1단위 비율을 기준으로 포맷 (내부에서 100단위/amount 처리)
+            # 1단위 비율 기반 포맷(내부에서 100단위/amount 처리)
             txt = _format_response(base, target, amount, rate=None)
             fx_debug("ok:", txt)
-            speak_en(txt)
+            say_once(txt)
             return
         except Exception as e:
             fx_debug("primary fetch failed on RE path:", repr(e), "— trying freeform fallback")
-            # 자유형으로 재시도
+            # 자유형으로 재시도 (성공/실패 상관없이 say_once 한 번만)
             fb_base, fb_target = infer_pair_freeform(s)
             fx_debug("fallback freeform:", (fb_base, fb_target))
             if fb_base and fb_target:
@@ -236,11 +264,11 @@ def handle_fx_query(q: str):
                     try:
                         txt = _format_response(b, t, None, rate=None)
                         fx_debug("fallback ok:", txt)
-                        speak_en(txt)
+                        say_once(txt)
                         return
                     except Exception as e2:
                         fx_debug("fallback fetch failed:", repr(e2))
-            speak_en("I couldn't fetch the exchange rate right now.")
+            say_once("I couldn't fetch the exchange rate right now.")
             return
 
     fx_debug("free parsing")
@@ -254,20 +282,30 @@ def handle_fx_query(q: str):
         if (target, base) in ALLOWED_PAIRS:
             try_pairs.append((target, base))
         if try_pairs:
-            for b, t in try_pairs:
-                try:
-                    txt = _format_response(b, t, None, rate=None)
-                    print(">>>>> txt" + txt)
-                    fx_debug("ok:", txt)
-
-                    speak_en(txt)
-                    return
-                except Exception as e:
-                    fx_debug("fetch failed:", repr(e))
+            # 앞 순서 먼저, 실패 시 역순 1회만
+            b, t = try_pairs[0]
+            try:
+                txt = _format_response(b, t, None, rate=None)
+                fx_debug("ok:", txt)
+                say_once(txt)
+                return
+            except Exception as e:
+                fx_debug("fetch failed (forward):", repr(e))
+                if len(try_pairs) > 1:
+                    b2, t2 = try_pairs[1]
+                    try:
+                        txt = _format_response(b2, t2, None, rate=None)
+                        fx_debug("ok (reversed):", txt)
+                        say_once(txt)
+                        return
+                    except Exception as e2:
+                        fx_debug("fetch failed (reversed):", repr(e2))
+            say_once("I couldn't fetch the exchange rate right now.")
+            return
         fx_debug("pair not allowed (freeform):", (base, target))
-        speak_en("That pair is not supported.")
+        say_once("That pair is not supported.")
         return
 
     # 3) 실패 안내
     fx_debug("could not parse any currencies")
-    speak_en("Please say like: from Korea to Japan, or 1000 won to CAD.")
+    say_once("Failure")

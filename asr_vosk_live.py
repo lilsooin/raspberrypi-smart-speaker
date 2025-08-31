@@ -2,38 +2,49 @@
 import json, queue, sys, time
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
-from voice_router import on_asr_final
+
+# 라우터: on_asr_final + recognizer reset 콜백 연결
+from voice_router import on_asr_final, set_recognizer_reset
 
 MODEL_PATH = "models/vosk-model-en-us-0.22-lgraph"
 SAMPLE_RATE = 16000
-BLOCKSIZE = 4096  # ↓ Reduced from 0.5s to ~0.26s (improves perceived response time)
+BLOCKSIZE = 4096  # ~0.256s @16k mono. 필요 시 3072/2048로 더 줄여도 OK.
+
+# NOTE:
+# - 가능하면 전부 소문자. (대문자 토큰은 vocab 경고가 뜨기 쉬움)
+# - 'what's the weather like in', 'how is the weather in' 사이에 반드시 콤마!
 PHRASES = [
     # Wake words (boost)
     "hey there", "hello there", "the hey there", "the hello there",
 
     # Sentence patterns (questions)
-    "what is the weather in", "what's the weather in", "what's the weather like in" "how is the weather in",
+    "what is the weather in", "what's the weather in", "what's the weather like in", "how is the weather in",
 
     # Date tokens (query helpers)
     "what is the temperature in", "temperature in", "weather in",
     "weather now in", "temperature now in", "now in", "right now in",
     "now", "today", "tomorrow", "day after tomorrow",
 
-    # City names (formal + common typos/variants)
+    # Weekdays
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+
+    # City names (formal + common typos/variants)
     "miyazaki", "miyasaki", "miya zaki",
     "toronto", "tokyo", "busan", "pusan", "seoul", "seol", "soul", "new york",
 
-    # currency words
-     # 한국 원
-    "currency", "exchange", "to", "from",
-    "KOR", "won", "korean", "korea",
-    # 일본 엔
-    "JP", "jpy", "yen", "japanese", "japan",
-    # 미국 달러
-    "USD", "dollar", "USD", "us", "america", "american",
-    # 캐나다 달러
-    "CAD", "canadian", "canada"
+    # Currency intent words / connectors
+    "currency", "exchange", "rate", "rates", "fx",
+    "to", "from", "in", "into",
+
+    # Currency / country names (소문자)
+    # 한국 원 / 대한민국
+    "kor", "krw", "won", "korean", "korea", "seoul", "busan", "pusan",
+    # 일본 엔 / 일본
+    "jp", "jpy", "yen", "japanese", "japan", "tokyo", "osaka",
+    # 미국 달러 / 미국
+    "usd", "dollar", "us", "u s", "america", "american",
+    # 캐나다 달러 / 캐나다
+    "cad", "canadian", "canada",
 ]
 
 def _is_wake_like(text: str) -> bool:
@@ -44,6 +55,14 @@ def main():
     model = Model(MODEL_PATH)
     rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(PHRASES))
     rec.SetWords(True)
+
+    # 라우터가 TTS 직후 인식기 버퍼를 리셋할 수 있도록 콜백 연결
+    def reset_recognizer():
+        try:
+            rec.Reset()
+        except Exception:
+            pass
+    set_recognizer_reset(reset_recognizer)
 
     # Limit the number of audio chunks queued to prevent overflow
     q = queue.Queue(maxsize=8)
@@ -89,9 +108,9 @@ def main():
                             continue
 
                         print(">>", text)
-                        on_asr_final(text, confidence=None)                            
+                        on_asr_final(text, confidence=None)
 
-                        # Update state and reset (important!)
+                        # Update state and reset (중요!)
                         last_final_text = text
                         last_final_ts = now
                         rec.Reset()
