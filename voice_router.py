@@ -5,13 +5,13 @@ from weatherapi_en import handle_weather_query, speak_en
 from fxapi_en import handle_fx_query
 
 # ------------------------
-# 상태 변수들
+# State variables
 # ------------------------
 _last_text = ""
 _last_ts = 0.0
-_DEBOUNCE_SEC = 2.5   # 연속 인식 디바운스 시간
+_DEBOUNCE_SEC = 2.5   # Debounce window for consecutive recognitions
 
-# 웨이크워드/의도 키워드
+# Wake word / intent keywords
 SLEEP_WORDS = ["sleep", "stop listening", "go to sleep"]
 KEEP_AWAKE_ON_ACTIVITY_SEC = 6
 POST_TTS_GRACE_SEC = 6
@@ -21,23 +21,23 @@ FX_INTENT = re.compile(r"\b(exchange(?:\s+rate)?|currency|fx|rate|rates)\b", re.
 WEATHER_INTENT = re.compile(r"\b(weather|temperature|forecast)\b", re.I)
 
 # ------------------------
-# TTS 에코 억제/하드리셋
+# Suppress TTS echo / hard reset
 # ------------------------
 _TTS_SUPPRESS_UNTIL = 0.0
-POST_TTS_SUPPRESS_SEC = 1.25   # TTS 끝나고 이만큼은 무시
+POST_TTS_SUPPRESS_SEC = 1.25   # Ignore ASR for this long after TTS finishes
 
-recognizer_reset_cb = None  # 외부에서 rec.Reset() 연결
+recognizer_reset_cb = None  # Hook to connect external rec.Reset()
 
 def _now() -> float:
     return time.time()
 
 def suppress_asr_for(sec: float):
-    """TTS 에코 억제"""
+    """Suppress ASR to avoid capturing TTS echo."""
     global _TTS_SUPPRESS_UNTIL
     _TTS_SUPPRESS_UNTIL = max(_TTS_SUPPRESS_UNTIL, _now() + sec)
 
 def _hard_reset_after_tts():
-    """ASR 내부 상태/디바운스 리셋"""
+    """Reset ASR internal state / debounce variables."""
     global _last_text, _last_ts
     _last_text = ""
     _last_ts = 0.0
@@ -52,25 +52,25 @@ def set_recognizer_reset(cb):
     recognizer_reset_cb = cb
 
 # ------------------------
-# 도메인 판정 / 슬라이스
+# Domain detection / slicing
 # ------------------------
 def _is_wake_phrase(q: str) -> bool:
     return q.startswith("hello there") or q.startswith("hey there")
 
 def _is_awake() -> bool:
-    # TODO: 상태 관리 로직 (예시에서는 항상 True 가정)
+    # TODO: State management logic (assume always True in this example)
     return True
 
 def _wake():
-    # TODO: 상태 awake = True
+    # TODO: state awake = True
     pass
 
 def _sleep():
-    # TODO: 상태 awake = False
+    # TODO: state awake = False
     pass
 
 def keep_awake(sec: float):
-    # TODO: 타이머 리셋
+    # TODO: reset keep-awake timer
     pass
 
 def normalize(s: str) -> str:
@@ -93,7 +93,7 @@ def slice_from_first_keyword(q: str) -> str:
     return q
 
 def looks_like_fx(q: str) -> bool:
-    # 통화 단어가 들어가면 FX 취급
+    # Treat as FX if currency-related words appear
     return any(w in q for w in ["usd", "dollar", "won", "korea", "japan", "yen", "canada", "cad"])
 
 def route_domain(text: str) -> str:
@@ -105,55 +105,55 @@ def route_domain(text: str) -> str:
     return "unknown"
 
 def extract_city(q: str):
-    # TODO: 도시 파싱
+    # TODO: parse city name
     return None
 
 WHEN_PAT = re.compile(r"\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", re.I)
 
 # ------------------------
-# on_asr_final 본체
+# on_asr_final main routine
 # ------------------------
 def on_asr_final(recognized_text: str, confidence: float | None = None):
     global _last_text, _last_ts
 
-    # 0) TTS 에코 억제 게이트
+    # 0) Gate for suppressing TTS echo
     if _now() < _TTS_SUPPRESS_UNTIL:
         print(f"[Router] Suppressed during TTS: {recognized_text.strip()}")
         return
 
-    # 1) 정리
+    # 1) Normalize
     q_raw = recognized_text
     q = normalize(q_raw)
 
-    # 활동 감지로 깨어있기 연장
+    # Extend awake state due to detected activity
     keep_awake(KEEP_AWAKE_ON_ACTIVITY_SEC)
 
-    # 웨이크워드 여부
+    # Check wake phrase
     is_wake_like = _is_wake_phrase(q)
 
-    # 2) 짧은 문장 필터
+    # 2) Filter very short utterances
     if not (is_wake_like or WEATHER_INTENT.search(q) or FX_INTENT.search(q) or looks_like_fx(q)):
         if len(q) < 3 or len(q.split()) < 2:
             print(f"[Router] Ignored short: {q}")
             return
 
-    # 3) 디바운스
+    # 3) Debounce
     now = time.time()
     if q == _last_text and (now - _last_ts) < _DEBOUNCE_SEC:
         print(f"[Router] Debounced: {q}")
         return
     _last_text, _last_ts = q, now
 
-    # 4) 수면 명령
+    # 4) Sleep commands
     if any(q.startswith(s) or q == s for s in SLEEP_WORDS):
         _sleep()
         print("[Router] Sleep.")
         return
 
-    # 5) 웨이크/의도 기반 각성
+    # 5) Wake / intent-driven activation
     if _is_awake() or is_wake_like or WEATHER_INTENT.search(q) or FX_INTENT.search(q) or looks_like_fx(q):
         _wake()
-        # 웨이크 직후 인식기 버퍼 리셋
+        # Reset recognizer buffer right after wake
         if recognizer_reset_cb:
             recognizer_reset_cb()
 
@@ -164,30 +164,30 @@ def on_asr_final(recognized_text: str, confidence: float | None = None):
             print("[Router] Wake!")
             return
 
-    # 6) 아직 수면이면 무시
+    # 6) If still sleeping, ignore
     if not _is_awake():
         print(f"[Router] Ignored while sleeping: {q}")
         return
 
-    # 7) 웨이크워드 제거 + 키워드 기준 슬라이스
+    # 7) Remove wake phrase + slice from first keyword
     q = _strip_leading_wake(q)
     q = slice_from_first_keyword(q)
 
-    # 8) 도메인 판정
+    # 8) Domain routing
     domain = route_domain(q)
 
-    # 9) 날씨는 도시/시점 파싱
+    # 9) For weather, parse city/time
     if domain == "weather":
         _ = extract_city(q)
         _ = WHEN_PAT.search(q) is not None
 
-    # 10) 핸들러 호출
+    # 10) Invoke handlers
     if domain == "fx":
         keep_awake(KEEP_AWAKE_ON_ACTIVITY_SEC)
         try:
             handle_fx_query(q)
         finally:
-            # ★ TTS 직후 억제/하드리셋/여유
+            # ★ After TTS: suppress/ hard reset / grace period
             suppress_asr_for(POST_TTS_SUPPRESS_SEC)
             _hard_reset_after_tts()
             keep_awake(POST_TTS_GRACE_SEC)
